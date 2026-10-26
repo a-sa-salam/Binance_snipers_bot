@@ -124,10 +124,25 @@ def net_value(amount, entry, exit_price):
 
 # ================= اتصال Binance (أسعار وشموع حقيقية) =================
 class Binance:
-    BASE = 'https://api.binance.com'
+    # data-api.binance.vision: بيانات السوق العامة، تعمل أيضاً من خوادم GitHub (أمريكا) التي يحجبها api.binance.com
+    BASES = [os.environ.get('BINANCE_BASE', 'https://data-api.binance.vision'), 'https://api.binance.com']
 
     def __init__(self):
+        self.BASE = self.BASES[0]
         self.info = {}
+        self.opener = urllib.request.build_opener()
+        proxy = os.environ.get('PROXY_URL', '')
+        if not proxy:                                   # بروكسي WARP على GitHub: يُكتشف تلقائياً إن كان يعمل
+            import socket
+            try:
+                socket.create_connection(('127.0.0.1', 40000), timeout=1).close()
+                proxy = 'http://127.0.0.1:40000'
+            except OSError:
+                proxy = ''
+        if proxy:
+            self.opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
+            print(f"✔ اتصال Binance عبر البروكسي {proxy}", flush=True)
         self.key = os.environ.get('BINANCE_KEY', '')
 
     def _get(self, path, params=None, tries=4):
@@ -139,7 +154,7 @@ class Binance:
         for k in range(tries):
             try:
                 req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with self.opener.open(req, timeout=30) as r:
                     return json.loads(r.read())
             except urllib.error.HTTPError as e:
                 msg = e.read().decode(errors='ignore')[:150]
@@ -147,9 +162,17 @@ class Binance:
                     time.sleep(5 * (k + 1))
                     last = RuntimeError(f"Binance {e.code}: {msg}")
                     continue
+                if e.code in (451, 403) and k < tries - 1:   # الموقع محجوب: جرّب العنوان الآخر
+                    self.BASE = self.BASES[1] if self.BASE == self.BASES[0] else self.BASES[0]
+                    url = self.BASE + path + ('?' + urllib.parse.urlencode(params) if params else '')
+                    last = RuntimeError(f"Binance {e.code}: {msg}")
+                    continue
                 raise RuntimeError(f"Binance {e.code}: {msg}")
             except Exception as e:            # انقطاع الشبكة / انتهاء المهلة
                 last = e
+                if k == 1:                    # بعد فشلين: جرّب العنوان الآخر
+                    self.BASE = self.BASES[1] if self.BASE == self.BASES[0] else self.BASES[0]
+                    url = self.BASE + path + ('?' + urllib.parse.urlencode(params) if params else '')
                 time.sleep(2 * (k + 1))
         raise RuntimeError(f"فشل الاتصال بعد {tries} محاولات: {last}")
 

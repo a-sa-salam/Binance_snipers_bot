@@ -12,11 +12,22 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
+        
     - name: Install dependencies
       run: pip install -r requirements.txt
+      
+    - name: Set up VPN (Proxy)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y proxychains4
+        echo "socks5 127.0.0.1 9050" | sudo tee -a /etc/proxychains4.conf
+        sudo apt-get install -y tor
+        sudo service tor start
+        
     - name: Run Bot
-      run: python bot.py
+      run: proxychains4 python bot.py

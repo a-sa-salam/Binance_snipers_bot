@@ -40,7 +40,7 @@ def load_env(name='.env'):
         if path:
             break
     if not path:
-        print("⚠️ لم أجد ملف .env بجانب bot.py. ضعه في نفس المجلد.", flush=True)
+        print("ℹ️ لا يوجد ملف .env: أقرأ الإعدادات من متغيرات البيئة (GitHub Secrets).", flush=True)
         return
     os.chdir(os.path.dirname(path))
     if os.path.dirname(path) not in sys.path:
@@ -50,7 +50,8 @@ def load_env(name='.env'):
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 k, v = line.split('=', 1)
-                os.environ[k.strip()] = v.strip().strip('"').strip("'")
+                # إعدادات GitHub Secrets (متغيرات البيئة) لها الأولوية على ملف .env
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
     print(f"✔ قرأت الإعدادات من: {path}", flush=True)
 
 
@@ -143,7 +144,7 @@ class Binance:
             self.opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
             print(f"✔ اتصال Binance عبر البروكسي {proxy}", flush=True)
-        self.key = os.environ.get('BINANCE_KEY', '')
+        self.key = os.getenv('BINANCE_API') or os.getenv('BINANCE_KEY', '')
 
     def _get(self, path, params=None, tries=4):
         url = self.BASE + path + ('?' + urllib.parse.urlencode(params) if params else '')

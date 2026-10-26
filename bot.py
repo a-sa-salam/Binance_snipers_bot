@@ -481,101 +481,52 @@ def run_signals():
                             log(f"استعد للخروج: {p['sym']}")
                     save()
             else:
-                # 1) بعد إغلاق كل شمعة 15 دقيقة: ابحث عن مطارق جديدة
+                # 1) كل 15 دقيقة: السكنر يفحص السوق ويرفع إشارات المراقبة
                 bar = int(time.time() // 900)
                 if bar != last_bar and time.time() % 900 >= 5:
                     last_bar = bar
                     mkt = market_state(ex)
-                    found = 0
                     if 'هابط بقوة' in mkt:
                         log("السوق هابط بقوة: لا أبحث عن دخول الآن")
-                    for s in ([] if 'هابط بقوة' in mkt else coins):
-                        if s in watching or len(watching) >= MAX_WATCH:
-                            continue
-                        last_scan = s
-                        cs = ex.candles(s, limit=60, interval='15m')[:-1]
-                        if len(cs) < 30 or not is_hammer(cs, len(cs) - 1):
-                            continue
-                        found += 1
-                        dd = getattr(ex, 'daily', {}).get(s, {})
-                        r15 = rsi([x[4] for x in cs])
-                        r15m = min(r15[-3:])
-                        avg_v = sum(x[5] for x in cs[-21:-1]) / 20
-                        vr = cs[-1][5] / avg_v if avg_v > 0 else 0
-                        vals = {'ربح24س': dd.get('ch'), 'حجم_المطرقة×': vr, 'RSI6_15د': r15m,
-                                'RSI6_يومي': dd.get('rsi'), 'السوق': mkt, 'السعر': cs[-1][4]}
-                        if r15m > RSI_15M:
-                            jr.reject(s, f'RSI6_15د>{RSI_15M:g}', 'مطرقة', **vals)
-                            continue                          # لا تشبّع بيعي: المطرقة ضعيفة
-                        if vr < HAMMER_VOL:
-                            jr.reject(s, f'حجم_المطرقة<{HAMMER_VOL:g}', 'مطرقة', **vals)
-                            continue                          # المطرقة بلا حجم تداول
-                        h1 = ex.candles(s, limit=30, interval='1h')[:-1]
-                        last_h = h1[-1]
-                        r1h = rsi([x[4] for x in h1])[-1]
-                        h1_hammer = is_hammer(h1, len(h1) - 1)
-                        vals['RSI6_ساعة'] = r1h
-                        if not (h1_hammer or last_h[4] > last_h[1]):
-                            jr.reject(s, 'الساعة_حمراء', 'مطرقة', **vals)
-                            continue                          # الساعة لا تؤكد
-                        if r1h >= RSI_1H:
-                            jr.reject(s, f'RSI6_ساعة≥{RSI_1H:g}', 'مطرقة', **vals)
-                            continue
-                        sp = spread(ex, s)
-                        vals['Spread_%'] = sp * 100
-                        if sp > MAX_SPREAD:
-                            jr.reject(s, 'Spread_كبير', 'مطرقة', **vals)
-                            continue                          # فرق سعر كبير يأكل الربح
-                        hm = cs[-1]
-                        stars, label = coin_strength(dd.get('ch', 0), vr, r15m, h1_hammer, dd)
-                        watching[s] = {'high': hm[2], 'low': hm[3], 'until': time.time() + 30 * 60,
-                                       'm': {'watch_time': jr.now_str(), 'wt': time.time(), 'ch24': dd.get('ch'),
-                                             'vr': vr, 'r15': r15m, 'r1h': r1h, 'r1d': dd.get('rsi'),
-                                             'h1_hammer': h1_hammer, 'd_hammer': dd.get('hammer'),
-                                             'd_above': dd.get('above'), 'stars': len(stars), 'mkt_watch': mkt,
-                                             'high': hm[2], 'low': hm[3]}}
+                    sigs, rejects, last, found = scan_hammers(ex, coins, skip=watching,
+                                                              slots=MAX_WATCH - len(watching), mkt=mkt)
+                    last_scan = last or last_scan
+                    for s, reason, vals in rejects:
+                        jr.reject(s, reason, 'مطرقة', **vals)
+                    for g in sigs:
+                        s = g['sym']
+                        watching[s] = {'high': g['high'], 'low': g['low'], 'until': time.time() + 30 * 60,
+                                       'm': {'watch_time': jr.now_str(), 'wt': time.time(), 'ch24': g['ch24'],
+                                             'vr': g['vr'], 'r15': g['r15'], 'r1h': g['r1h'], 'r1d': g['r1d'],
+                                             'h1_hammer': g['h1_hammer'], 'd_hammer': g['d_hammer'],
+                                             'd_above': g['d_above'], 'stars': len(g['stars']), 'mkt_watch': mkt,
+                                             'high': g['high'], 'low': g['low']}}
                         tg.send(f"👀 راقب: {s}\n"
                                 f"المبلغ: {st['balance']:.2f}$\n"
-                                f"القوة: {stars} {label}\n"
-                                f"24 ساعة: {dd.get('ch', 0):+.1f}%")
-                        log(f"راقب {s} | 24س {dd.get('ch', 0):+.1f}% | حجم ×{vr:.1f} | RSI6 15د {r15m:.0f} ساعة {r1h:.0f} يومي {dd.get('rsi', 0):.0f}")
-                        jr.event('مراقبة', s, القوة=len(stars), **vals)
+                                f"القوة: {g['stars']} {g['label']}\n"
+                                f"24 ساعة: {(g['ch24'] or 0):+.1f}%")
+                        log(f"راقب {s} | 24س {(g['ch24'] or 0):+.1f}% | حجم ×{g['vr']:.1f} | RSI6 15د {g['r15']:.0f} ساعة {g['r1h']:.0f} يومي {(g['r1d'] or 0):.0f}")
+                        jr.event('مراقبة', s, القوة=len(g['stars']), **g['vals'])
                     jr.event('فحص_15د', '', السوق=mkt, عملات=len(coins), مطارق=found, أراقب=' '.join(watching))
-                # 2) كل 10 ثوانٍ: هل كسرت إحدى العملات قمة المطرقة؟
+                # 2) كل 10 ثوانٍ: السكنر يفحص الكسر، والبوت يقرر الدخول ويدير المخاطرة
                 for s, w in list(watching.items()):
-                    now = ex.price(s)
                     m = w['m']
-                    if time.time() > w['until']:
+                    r = check_entry(ex, s, w)
+                    now = r['price']
+                    if r['action'] == 'drop':
                         del watching[s]
-                        log(f"ألغيت مراقبة {s}")
-                        jr.reject(s, 'لم_تكسر_خلال_30د' + ('_كسر_ضعيف' if w.get('weak') else ''), 'مراقبة',
-                                  **{'ربح24س': m['ch24'], 'حجم_المطرقة×': m['vr'], 'RSI6_15د': m['r15'],
+                        log(f"ألغيت مراقبة {s}: {r['reason']}")
+                        jr.reject(s, r['reason'], 'دخول' if 'ربح24س' in r['reason'] else 'مراقبة',
+                                  **{'ربح24س': r.get('ch24', m['ch24']), 'حجم_المطرقة×': m['vr'], 'RSI6_15د': m['r15'],
                                      'RSI6_ساعة': m['r1h'], 'RSI6_يومي': m['r1d'], 'السوق': mkt, 'السعر': now,
-                                     'حجم_الكسر×': w.get('weak')})
-                    elif now > w['high'] and now <= w['high'] * (1 + MAX_CHASE + 0.002):
-                        # قياس الكسر: هل الكسر بحجم تداول حقيقي؟
-                        k = ex.candles(s, limit=21, interval='15m')
-                        avg_v = sum(x[5] for x in k[:-1]) / max(1, len(k) - 1)
-                        frac = max(0.2, (time.time() * 1000 - k[-1][0]) / 900_000)
-                        brk_vr = (k[-1][5] / frac) / avg_v if avg_v > 0 else 0
-                        if brk_vr < BRK_VOL:
-                            if not w.get('weak'):
-                                jr.event('كسر_ضعيف', s, حجم_الكسر=brk_vr, السعر=now)
-                            w['weak'] = brk_vr
-                            continue                      # كسر ضعيف بلا حجم: ننتظر
-                        c24 = ch24_now(s)
-                        if c24 < MIN_24H:
-                            del watching[s]
-                            log(f"تخطيت {s}: ربح 24 ساعة نزل تحت {MIN_24H:g}%")
-                            jr.reject(s, f'ربح24س<{MIN_24H:g}', 'دخول', **{'ربح24س': c24, 'السعر': now,
-                                      'حجم_الكسر×': brk_vr, 'السوق': mkt})
-                            continue                      # الشرط الأساسي: رابحة ≥5% في 24 ساعة لحظة الدخول
-                        sp = spread(ex, s)
-                        if sp > MAX_SPREAD:
-                            if not w.get('wide'):
-                                jr.event('Spread_اتسع', s, Spread=sp * 100)
-                            w['wide'] = True
-                            continue                      # فرق السعر اتسع: ننتظر
+                                     'حجم_الكسر×': r.get('brk_vr', w.get('weak'))})
+                    elif r['action'] == 'wait':
+                        key = 'weak' if r['reason'] == 'كسر_ضعيف' else 'wide'
+                        if not w.get(key):
+                            jr.event(r['reason'], s, حجم_الكسر=r.get('brk_vr'), Spread=r.get('spread', 0) * 100, السعر=now)
+                        w[key] = r.get('brk_vr', True)
+                    elif r['action'] == 'enter':
+                        sp, brk_vr, c24 = r['spread'], r['brk_vr'], r['ch24']
                         tp = ex.ceil_price(s, target_price(now))
                         stop = max(w['low'] * 0.998, now * (1 - STOP)) if STOP else w['low'] * 0.998
                         m.update({'entry_time': jr.now_str(), 'wait': (time.time() - m['wt']) / 60,
@@ -592,12 +543,6 @@ def run_signals():
                         jr.event('دخول', s, السعر=now, الهدف=tp, الوقف=stop, المبلغ=st['balance'],
                                  حجم_الكسر=brk_vr, ربح24س=c24, Spread=sp * 100, السوق=mkt)
                         break
-                    elif now > w['high']:
-                        del watching[s]
-                        log(f"تخطيت {s}: السعر هرب فوق قمة المطرقة")
-                        jr.reject(s, 'السعر_هرب_فوق_القمة', 'مراقبة',
-                                  **{'ربح24س': m['ch24'], 'حجم_المطرقة×': m['vr'], 'RSI6_15د': m['r15'],
-                                     'RSI6_ساعة': m['r1h'], 'RSI6_يومي': m['r1d'], 'السوق': mkt, 'السعر': now})
         except Exception as e:
             notify = time.time() - last_err > 1800
             if notify:

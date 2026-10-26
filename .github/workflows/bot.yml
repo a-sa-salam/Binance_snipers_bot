@@ -21,8 +21,19 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
       
-    - name: Run Bot with Proxy
+    - name: Install and Start Proxy (WARP)
+      run: |
+        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ focal main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+        sudo apt-get update
+        sudo apt-get install -y cloudflare-warp
+        warp-cli --accept-tos registration new
+        warp-cli --accept-tos mode proxy
+        warp-cli --accept-tos proxy port 40000
+        warp-cli --accept-tos connect
+        
+    - name: Run Bot
       env:
-        HTTP_PROXY: http://138.201.130.148:3128
-        HTTPS_PROXY: http://138.201.130.148:3128
+        HTTPS_PROXY: http://127.0.0.1:40000
+        HTTP_PROXY: http://127.0.0.1:40000
       run: python bot.py

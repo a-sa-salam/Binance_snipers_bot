@@ -328,3 +328,87 @@ def good_coins(ex):
             good.append((-ch.get(s, 0), len(good), s))
     good.sort()
     return all_coins, [s for _, _, s in good[:int(TOP_FINAL)]]
+
+
+# ================= إشارات السكنر (يرفعها إلى البوت) =================
+def scan_hammers(ex, coins, skip=(), slots=MAX_WATCH, mkt=''):
+    """فحص 15 دقيقة: يبحث في العملات المقبولة عن مطرقة تحقق كل الشروط.
+    يرجع: (إشارات المراقبة، المرفوضة مع السبب، آخر عملة فُحصت، عدد المطارق)"""
+    signals, rejects, last, found = [], [], '', 0
+    if 'هابط بقوة' in mkt:
+        return signals, rejects, last, found
+    for s in coins:
+        if s in skip or len(signals) >= slots:
+            continue
+        last = s
+        cs = ex.candles(s, limit=60, interval='15m')[:-1]
+        if len(cs) < 30 or not is_hammer(cs, len(cs) - 1):
+            continue
+        found += 1
+        dd = getattr(ex, 'daily', {}).get(s, {})
+        r15m = min(rsi([x[4] for x in cs])[-3:])
+        avg_v = sum(x[5] for x in cs[-21:-1]) / 20
+        vr = cs[-1][5] / avg_v if avg_v > 0 else 0
+        vals = {'ربح24س': dd.get('ch'), 'حجم_المطرقة×': vr, 'RSI6_15د': r15m,
+                'RSI6_يومي': dd.get('rsi'), 'السوق': mkt, 'السعر': cs[-1][4]}
+        if r15m > RSI_15M:
+            rejects.append((s, f'RSI6_15د>{RSI_15M:g}', vals))         # لا تشبّع بيعي
+            continue
+        if vr < HAMMER_VOL:
+            rejects.append((s, f'حجم_المطرقة<{HAMMER_VOL:g}', vals))    # مطرقة بلا حجم
+            continue
+        h1 = ex.candles(s, limit=30, interval='1h')[:-1]
+        r1h = rsi([x[4] for x in h1])[-1]
+        h1_hammer = is_hammer(h1, len(h1) - 1)
+        vals['RSI6_ساعة'] = r1h
+        if not (h1_hammer or h1[-1][4] > h1[-1][1]):
+            rejects.append((s, 'الساعة_حمراء', vals))                   # الساعة لا تؤكد
+            continue
+        if r1h >= RSI_1H:
+            rejects.append((s, f'RSI6_ساعة≥{RSI_1H:g}', vals))
+            continue
+        sp = spread(ex, s)
+        vals['Spread_%'] = sp * 100
+        if sp > MAX_SPREAD:
+            rejects.append((s, 'Spread_كبير', vals))                    # فرق سعر يأكل الربح
+            continue
+        stars, label = coin_strength(dd.get('ch', 0), vr, r15m, h1_hammer, dd)
+        signals.append({'sym': s, 'high': cs[-1][2], 'low': cs[-1][3], 'stars': stars, 'label': label,
+                        'ch24': dd.get('ch'), 'vr': vr, 'r15': r15m, 'r1h': r1h, 'r1d': dd.get('rsi'),
+                        'h1_hammer': h1_hammer, 'd_hammer': dd.get('hammer'), 'd_above': dd.get('above'),
+                        'vals': vals})
+    return signals, rejects, last, found
+
+
+def check_entry(ex, s, w):
+    """كل 10 ثوانٍ لعملة تحت المراقبة: هل حان الدخول؟
+    يرجع dict فيه action: 'enter' ادخل | 'wait' انتظر | 'drop' ألغِ المراقبة | 'none' لا جديد"""
+    now = ex.price(s)
+    r = {'action': 'none', 'price': now, 'reason': ''}
+    if time.time() > w['until']:
+        r.update(action='drop', reason='لم_تكسر_خلال_30د' + ('_كسر_ضعيف' if w.get('weak') else ''))
+        return r
+    if now <= w['high']:
+        return r
+    if now > w['high'] * (1 + MAX_CHASE + 0.002):
+        r.update(action='drop', reason='السعر_هرب_فوق_القمة')
+        return r
+    # قياس الكسر: هل الكسر بحجم تداول حقيقي؟
+    k = ex.candles(s, limit=21, interval='15m')
+    avg_v = sum(x[5] for x in k[:-1]) / max(1, len(k) - 1)
+    frac = max(0.2, (time.time() * 1000 - k[-1][0]) / 900_000)
+    r['brk_vr'] = (k[-1][5] / frac) / avg_v if avg_v > 0 else 0
+    if r['brk_vr'] < BRK_VOL:
+        r.update(action='wait', reason='كسر_ضعيف')
+        return r
+    r['ch24'] = float(ex._get('/api/v3/ticker/24hr', {'symbol': s})['priceChangePercent'])
+    if r['ch24'] < MIN_24H:
+        r.update(action='drop', reason=f'ربح24س<{MIN_24H:g}')            # الشرط الأساسي لحظة الدخول
+        return r
+    r['spread'] = spread(ex, s)
+    if r['spread'] > MAX_SPREAD:
+        r.update(action='wait', reason='Spread_اتسع')
+        return r
+    r['action'] = 'enter'
+    return r
+

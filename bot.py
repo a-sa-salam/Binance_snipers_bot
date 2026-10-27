@@ -368,6 +368,10 @@ def run_signals():
              وقف=STOP * 100, أقصى_مدة=MAX_MINUTES)
     last_refresh, last_err, last_hb, last_bar = time.time(), 0, time.time(), 0
     last_daily, last_weekly, last_scan = None, None, ''
+    zero_warned = False
+    if not coins:
+        tg.send("⚠️ لا توجد عملة مقبولة الآن\n" + funnel_text(ex))
+        zero_warned = True
     mkt = mkt0
 
     def stats(since):
@@ -401,6 +405,9 @@ def run_signals():
                 all_coins, coins = good_coins(ex)
                 last_refresh = time.time()
                 log(f"حدّثت العملات المقبولة: {len(coins)} عملة")
+                if not coins and not zero_warned:
+                    tg.send("⚠️ لا توجد عملة مقبولة الآن\n" + funnel_text(ex))
+                zero_warned = not coins
                 jr.event('تحديث_العملات', '', المقبولة=len(coins), الكل=len(all_coins), العملات=' '.join(coins))
 
             # متابعة ما حدث للسعر بعد الخروج (هل خرجنا مبكراً أم في الوقت الصحيح؟)

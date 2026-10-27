@@ -1,52 +1,81 @@
-name: Run Python Bot
+"""
+فحص مفتاح Binance: هل يقبل Binance مفتاحك من هذا الجهاز؟ (قراءة فقط، لا يشتري ولا يبيع)
+ضعه في نفس مجلد البوت وشغّله. يقرأ من .env:
+  BINANCE_API=B1HQCMobinmvT15S0Rv2N2szefy6CcdjzC2LIudkBViJ4Tlsdn63i09C8C5X5AXX
+  BINANCE_SECRET=k6CGhJyn2ezV422dDn8ITFAOlE2ORZGu4Px8gVgODRNktLcrDG1mMx3d0cekY5zE
+"""
+import os, time, hmac, hashlib, json, urllib.request, urllib.error
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *'
+dirs = []
+try:
+    dirs.append(os.path.dirname(os.path.abspath(__file__)))
+except NameError:
+    pass
+dirs += [os.getcwd(), '/storage/emulated/0/Binance', '/sdcard/Binance']
+found = None
+for d in dirs:
+    for name in ('.env', 'env', '.env.txt', 'env.txt'):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            found = p
+            break
+    if found:
+        break
+if found:
+    print(f"📄 قرأت الإعدادات من: {found}")
+    names = []
+    for line in open(found, encoding='utf-8-sig'):
+        line = line.strip().lstrip('\ufeff')
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            k = k.strip().upper()
+            names.append(k)
+            os.environ.setdefault(k, v.strip().strip('"').strip("'"))
+    print("   الأسماء الموجودة في الملف: " + ", ".join(names) + "\n")
+else:
+    print("❌ لم أجد ملف .env. ضع check.py في نفس مجلد .env\n")
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-        
-    - name: Install dependencies
-      run: pip install -r requirements.txt
-      
-    - name: Install and Start Proxy (WARP)
-      run: |
-        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ focal main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-        sudo apt-get update
-        sudo apt-get install -y cloudflare-warp
-        warp-cli --accept-tos registration new
-        warp-cli --accept-tos mode proxy
-        warp-cli --accept-tos proxy port 40000
-        warp-cli --accept-tos connect
-        
-    - name: Run Bot
-      env:
-        HTTPS_PROXY: http://127.0.0.1:40000
-        HTTP_PROXY: http://127.0.0.1:40000
-        # ربط المفاتيح السرية من إعدادات جيت هاب
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        # الإعدادات (تم تمريرها كمتغيرات بيئة)
-        TRADE_USDT: "3"
-        NET_PROFIT_PCT: "1.5"
-        STOP_PCT: "2"
-        MAX_MINUTES: "60"
-        TOP_COINS: "5000"
-        TOP_FINAL: "50"
-        MIN_WINRATE: "65"
-        MODE: "signals"
-        TIMEZONE: "Africa/Khartoum"
-      run: python bot.py
+
+def first(*names):
+    for n in names:
+        if os.getenv(n):
+            return os.getenv(n).strip()
+    return ''
+
+
+KEY = first('BINANCE_API', 'BINANCE_KEY', 'BINANCE_API_KEY', 'API_KEY', 'APIKEY')
+SECRET = first('BINANCE_SECRET', 'BINANCE_API_SECRET', 'BINANCE_SECRET_KEY', 'API_SECRET', 'SECRET_KEY', 'SECRET')
+
+try:
+    ip = urllib.request.urlopen('https://api.ipify.org', timeout=15).read().decode()
+    print(f"🌐 عنوانك الحقيقي الآن كما يراه الإنترنت: {ip}")
+    print("   هذا هو الرقم الذي يجب أن يكون في قائمة Binance.\n")
+except Exception as e:
+    print(f"لم أستطع معرفة عنوانك: {e}\n")
+
+if not KEY or not SECRET:
+    print(f"❌ المفتاح: {'موجود' if KEY else 'غير موجود'} | السر: {'موجود' if SECRET else 'غير موجود'}")
+    print("   اكتب في ملف .env سطرين بهذه الأسماء بالضبط ثم احفظ وأعد التشغيل:")
+    print("   BINANCE_API=...")
+    print("   BINANCE_SECRET=...")
+    raise SystemExit
+
+q = f"timestamp={int(time.time() * 1000)}&recvWindow=10000"
+sig = hmac.new(SECRET.encode(), q.encode(), hashlib.sha256).hexdigest()
+req = urllib.request.Request(f"https://api.binance.com/api/v3/account?{q}&signature={sig}",
+                             headers={'X-MBX-APIKEY': KEY})
+try:
+    data = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    usdt = next((b for b in data['balances'] if b['asset'] == 'USDT'), {'free': '0'})
+    print("✅ المفتاح يعمل من هذا الجهاز")
+    print(f"   التداول مسموح: {'نعم' if data.get('canTrade') else 'لا'}")
+    print(f"   رصيد USDT المتاح: {float(usdt['free']):.2f}$")
+except urllib.error.HTTPError as e:
+    body = e.read().decode(errors='ignore')
+    print(f"❌ رفض Binance المفتاح ({e.code}): {body[:200]}")
+    if '-2015' in body:
+        print("   السبب: عنوان IP هذا الجهاز ليس في قائمة المفتاح، أو المفتاح/السر خطأ.")
+    elif '-1021' in body:
+        print("   السبب: ساعة الجهاز غير مضبوطة. اضبط الوقت تلقائياً وأعد المحاولة.")
+except Exception as e:
+    print(f"❌ تعذّر الاتصال بـ Binance: {e}")

@@ -197,7 +197,7 @@ def pick_coins(ex):
     """أعلى العملات سيولة التي تقبل صفقة بـ TRADE_USDT."""
     markets = ex.load_markets()
     vols = ex.volumes()
-    ok, total = [], 0
+    ok, total, low_min, mins = [], 0, 0, {}
     for sym, m in markets.items():
         if not (m['active'] and m['quote'] == 'USDT'):
             continue
@@ -206,11 +206,16 @@ def pick_coins(ex):
             continue
         # يجب أن تبقى قيمة البيع فوق الحد الأدنى حتى بعد الوقف والرسوم، وإلا لن تستطيع البيع
         sell_value = TRADE_USDT * (1 - STOP) * (1 - FEE) * 0.99
+        if m['min_cost'] is not None:
+            mins[m['min_cost']] = mins.get(m['min_cost'], 0) + 1
         if m['min_cost'] is None or m['min_cost'] > sell_value:
+            low_min += 1
             continue
         ok.append((vols.get(sym, 0), sym))
     ok.sort(reverse=True)
     ex.stats = (total, len(ok))                      # (كل أزواج USDT، التي تقبل مبلغك)
+    common = max(mins, key=mins.get) if mins else 0
+    ex.funnel = {'pairs': total, 'too_small': low_min, 'fit': len(ok), 'common_min': common}
     return [s for _, s in ok[:int(TOP_COINS)]]
 
 
@@ -310,12 +315,16 @@ def good_coins(ex):
     good = []
     ex.daily = {}
     ch = getattr(ex, 'change24', {})
+    up, errs, first_err = 0, 0, ''
     for s in all_coins:
         if ch.get(s, 0) < MIN_24H:
             continue                                    # الزخم: لم تربح 5% في 24 ساعة
+        up += 1
         try:
             d = ex.candles(s, limit=40, interval='1d')[:-1]     # الشموع اليومية المغلقة
-        except Exception:
+        except Exception as e:
+            errs += 1
+            first_err = first_err or str(e)[:120]
             continue
         if len(d) < 20:
             continue
@@ -327,7 +336,25 @@ def good_coins(ex):
             # الأفضل: الأقوى زخماً في 24 ساعة
             good.append((-ch.get(s, 0), len(good), s))
     good.sort()
+    f = getattr(ex, 'funnel', {})
+    f.update({'up': up, 'daily_ok': len(good), 'errors': errs, 'first_err': first_err})
+    ex.funnel = f
+    print(funnel_text(ex), flush=True)
     return all_coins, [s for _, _, s in good[:int(TOP_FINAL)]]
+
+
+def funnel_text(ex):
+    """تشخيص: أين تسقط العملات في كل مرحلة."""
+    f = getattr(ex, 'funnel', {})
+    t = (f"🔬 تشخيص الاختيار\n"
+         f"أزواج USDT: {f.get('pairs', 0)}\n"
+         f"تقبل صفقة {TRADE_USDT:g}$: {f.get('fit', 0)} (رُفض {f.get('too_small', 0)}: الحد الأدنى للطلب أكبر من مبلغك، "
+         f"والحد الأشيع {f.get('common_min', 0):g}$)\n"
+         f"ربحت ≥{MIN_24H:g}% في 24س: {f.get('up', 0)}\n"
+         f"اليومي جيد (المقبولة): {f.get('daily_ok', 0)}")
+    if f.get('errors'):
+        t += f"\n⚠️ أخطاء في جلب الشموع اليومية: {f['errors']} | {f.get('first_err', '')}"
+    return t
 
 
 # ================= إشارات السكنر (يرفعها إلى البوت) =================

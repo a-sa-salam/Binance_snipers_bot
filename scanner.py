@@ -194,7 +194,7 @@ class Binance:
 
 
 def pick_coins(ex):
-    """أعلى العملات سيولة التي تقبل صفقة بـ TRADE_USDT."""
+    """كل عملات USDT النشطة في المنصة، مرتبة بالسيولة. بلا أي قيد على مبلغ الصفقة (أنت تحدده)."""
     markets = ex.load_markets()
     vols = ex.volumes()
     ok, total, low_min, mins = [], 0, 0, {}
@@ -208,9 +208,7 @@ def pick_coins(ex):
         sell_value = TRADE_USDT * (1 - STOP) * (1 - FEE) * 0.99
         if m['min_cost'] is not None:
             mins[m['min_cost']] = mins.get(m['min_cost'], 0) + 1
-        if m['min_cost'] is None or m['min_cost'] > sell_value:
-            low_min += 1
-            continue
+        # لا قيد على المبلغ: الحد الأدنى للطلب يُعرض فقط ولا يستبعد أي عملة
         ok.append((vols.get(sym, 0), sym))
     ok.sort(reverse=True)
     ex.stats = (total, len(ok))                      # (كل أزواج USDT، التي تقبل مبلغك)
@@ -348,8 +346,7 @@ def funnel_text(ex):
     f = getattr(ex, 'funnel', {})
     t = (f"🔬 تشخيص الاختيار\n"
          f"أزواج USDT: {f.get('pairs', 0)}\n"
-         f"تقبل صفقة {TRADE_USDT:g}$: {f.get('fit', 0)} (رُفض {f.get('too_small', 0)}: الحد الأدنى للطلب أكبر من مبلغك، "
-         f"والحد الأشيع {f.get('common_min', 0):g}$)\n"
+         f"عملات للفحص: {f.get('fit', 0)}\n"
          f"ربحت ≥{MIN_24H:g}% في 24س: {f.get('up', 0)}\n"
          f"اليومي جيد (المقبولة): {f.get('daily_ok', 0)}")
     if f.get('errors'):
@@ -365,7 +362,7 @@ def scan_hammers(ex, coins, skip=(), slots=MAX_WATCH, mkt=''):
     if 'هابط بقوة' in mkt:
         return signals, rejects, last, found
     for s in coins:
-        if s in skip or len(signals) >= slots:
+        if s in skip:
             continue
         last = s
         cs = ex.candles(s, limit=60, interval='15m')[:-1]
@@ -404,7 +401,11 @@ def scan_hammers(ex, coins, skip=(), slots=MAX_WATCH, mkt=''):
                         'ch24': dd.get('ch'), 'vr': vr, 'r15': r15m, 'r1h': r1h, 'r1d': dd.get('rsi'),
                         'h1_hammer': h1_hammer, 'd_hammer': dd.get('hammer'), 'd_above': dd.get('above'),
                         'vals': vals})
-    return signals, rejects, last, found
+    # يفحص كل الخمسين أولاً، ثم يرفع الأقوى فقط (النجوم، ثم حجم المطرقة)
+    signals.sort(key=lambda g: (len(g['stars']), g['vr']), reverse=True)
+    for g in signals[max(0, slots):]:
+        rejects.append((g['sym'], 'أضعف_من_المختارة', g['vals']))
+    return signals[:max(0, slots)], rejects, last, found
 
 
 def check_entry(ex, s, w):

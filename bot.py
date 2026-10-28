@@ -301,7 +301,7 @@ def run_signals():
     ex = Binance()
     print("🔎 أختار العملات...", flush=True)
     all_coins, coins = good_coins(ex)
-    st = {'balance': TRADE_USDT, 'start': TRADE_USDT, 'trades': 0, 'wins': 0, 'pos': None, 'hist': []}
+    st = {'balance': 100.0, 'start': 100.0, 'trades': 0, 'wins': 0, 'pos': None, 'hist': []}
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE) as f:
@@ -314,10 +314,13 @@ def run_signals():
         with open(STATE_FILE, 'w') as f:
             json.dump(st, f, indent=2)
 
+    def perf():
+        """الأداء التراكمي % لو دخلت كل الإشارات بنفس المبلغ مع إعادة الاستثمار."""
+        return 100 * (st['balance'] / st['start'] - 1) if st['start'] else 0
+
     def status():
         txt = (f"📊 الحالة\n"
-               f"المبلغ الآن: {st['balance']:.3f}$\n"
-               f"المكسب الكلي: {st['balance'] - st['start']:+.3f}$\n"
+               f"الأداء الكلي: {perf():+.2f}%\n"
                f"الصفقات: {st['trades']} (رابحة {st['wins']})\n")
         p = st['pos']
         if p:
@@ -327,7 +330,7 @@ def run_signals():
                 left = MAX_MINUTES - (time.time() - p['t']) / 60
                 txt += (f"\n🟡 صفقة مفتوحة: {p['sym']}\n"
                         f"الدخول {fmt_p(p['entry'])} | الآن {fmt_p(now)}\n"
-                        f"قيمتها الآن: {val:.3f}$ ({val - p['amount']:+.3f}$)\n"
+                        f"الربح الآن: {100 * (val / p['amount'] - 1):+.2f}% صافي\n"
                         f"الهدف {fmt_p(p['tp'])} | الوقف {fmt_p(p['stop']) if p['stop'] else 'بدون'} | باقي {max(0, left):.0f} دقيقة")
             except Exception:
                 txt += f"\nصفقة مفتوحة: {p['sym']}"
@@ -342,7 +345,7 @@ def run_signals():
     t_start = time.time()
     tg.send(rtl([
         "🚀 البوت يعمل", LINE,
-        "💎 الرصيد: " + N("%.2f$" % st['balance']), LINE,
+        "💎 الأداء منذ البداية: " + N("%+.2f%%" % perf()), LINE,
         "🎯 شروط الدخول",
         f"• الصعود 24س: {N(f'≥{MIN_24H:g}%')}",
         "• الارتداد: مطرقة 15د + تأكيد الساعة + اليومي جيد",
@@ -355,7 +358,7 @@ def run_signals():
         f"• الهدف: {N(f'+{NET_PROFIT*100:g}%')} صافي بعد الرسوم",
         f"• وقف الخسارة: تحت قاع المطرقة، حتى {N(f'{STOP*100:g}%')}",
         f"• أقصى مدة: {N(int(MAX_MINUTES))} دقيقة", LINE,
-        "📐 حجم الصفقة: " + N("%.2f$" % st['balance']),
+        "📐 حجم الصفقة: أنت تحدده",
         "🧱 الوقف: يدوي (OCO)",
         f"🔎 العملات المقبولة الآن: {N(len(coins))} من {N(len(all_coins))}",
         f"🌍 مزاج السوق: {mkt0}",
@@ -389,11 +392,11 @@ def run_signals():
         base = st['balance'] - g
         return rtl([
             title, LINE,
-            "💰 الرصيد: " + N("%.2f$" % st['balance']),
-            f"📊 أرباح {label}: {N(f'{100 * g / base if base > 0 else 0:+.2f}%')} ({N(f'{g:+.3f}$')})",
+            "💰 الأداء الكلي: " + N("%+.2f%%" % perf()),
+            f"📊 أرباح {label}: {N(f'{100 * g / base if base > 0 else 0:+.2f}%')}",
             f"🧾 الصفقات: {N(n)} · ✅ رابحة: {N(w)} · 🩸 خاسرة: {N(n - w)}",
             f"🏆 نسبة النجاح: {N(f'{100 * w / n:.1f}%' if n else '—')}", LINE,
-            f"📈 منذ البداية: {N(st['trades'])} صفقة · " + N("%+.3f$" % (st['balance'] - st['start']))])
+            f"📈 منذ البداية: {N(st['trades'])} صفقة · " + N("%+.2f%%" % perf())])
     after = []        # متابعة السعر بعد الخروج: {'no','sym','price','t','d30','d60'}
 
     def ch24_now(s):
@@ -443,8 +446,8 @@ def run_signals():
                     why = ("🎯 وصل الهدف" if hit else
                            "🛑 وقف الخسارة (كسر قاع المطرقة)" if stopped else
                            f"⏱ مرّت {MAX_MINUTES} دقيقة، اخرج وانتقل لغيرها")
-                    tg.send(f"🔴 اخرج: {p['sym']}\nالمبلغ: {out:.2f}$\n{'الربح' if gain > 0 else 'الخسارة'}: {gain:+.2f}$")
-                    log(f"اخرج {p['sym']} | {why} | {gain:+.3f}$")
+                    tg.send(f"🔴 اخرج: {p['sym']}\n{'الربح' if gain > 0 else 'الخسارة'}: {100 * gain / p['amount']:+.2f}% صافي بعد الرسوم")
+                    log(f"اخرج {p['sym']} | {why} | {100 * gain / p['amount']:+.2f}%")
                     m = p.get('m', {})
                     jr.trade({
                         'رقم': st['trades'], 'العملة': p['sym'],
@@ -464,7 +467,7 @@ def run_signals():
                         'قمة_المطرقة': m.get('high'), 'قاع_المطرقة': m.get('low'),
                     })
                     tg.send(f"📋 تفاصيل الصفقة {st['trades']}: {p['sym']}\n"
-                            f"النتيجة: {'ربح' if gain > 0 else 'خسارة'} {gain:+.3f}$ ({100 * gain / p['amount']:+.2f}%)\n"
+                            f"النتيجة: {'ربح' if gain > 0 else 'خسارة'} {100 * gain / p['amount']:+.2f}%\n"
                             f"سبب الخروج: {'الهدف' if hit else 'الوقف' if stopped else 'انتهاء المدة'}\n"
                             f"الدخول {fmt_p(p['entry'])} ← الخروج {fmt_p(now)}\n"
                             f"المدة: {minutes:.0f} د | انتظار قبل الدخول: {m.get('wait', 0):.0f} د\n"
@@ -474,7 +477,7 @@ def run_signals():
                             f"حجم المطرقة ×{m.get('vr') or 0:.1f} | حجم الكسر ×{m.get('brk_vr') or 0:.1f} | Spread {m.get('spread') or 0:.2f}%\n"
                             f"مطرقة الساعة: {'نعم' if m.get('h1_hammer') else 'لا'} | مطرقة اليومي: {'نعم' if m.get('d_hammer') else 'لا'}\n"
                             f"القوة: {'⭐' * int(m.get('stars') or 0)} | السوق: {m.get('mkt_entry', '')}\n"
-                            f"الرصيد: {st['balance']:.3f}$ | الصفقات {st['trades']} (رابحة {st['wins']})")
+                            f"الأداء الكلي: {perf():+.2f}% | الصفقات {st['trades']} (رابحة {st['wins']})")
                     jr.event('خروج', p['sym'], السبب='الهدف' if hit else 'الوقف' if stopped else 'انتهاء_المدة',
                              السعر=now, الربح=gain, الرصيد=st['balance'], مدة=minutes,
                              أعلى=100 * (p['hi'] / p['entry'] - 1), أدنى=100 * (p['lo'] / p['entry'] - 1))
@@ -509,16 +512,20 @@ def run_signals():
                                              'd_above': g['d_above'], 'stars': len(g['stars']), 'mkt_watch': mkt,
                                              'high': g['high'], 'low': g['low']}}
                         tg.send(f"👀 راقب: {s}\n"
-                                f"المبلغ: {st['balance']:.2f}$\n"
                                 f"القوة: {g['stars']} {g['label']}\n"
                                 f"24 ساعة: {(g['ch24'] or 0):+.1f}%")
                         log(f"راقب {s} | 24س {(g['ch24'] or 0):+.1f}% | حجم ×{g['vr']:.1f} | RSI6 15د {g['r15']:.0f} ساعة {g['r1h']:.0f} يومي {(g['r1d'] or 0):.0f}")
                         jr.event('مراقبة', s, القوة=len(g['stars']), **g['vals'])
                     jr.event('فحص_15د', '', السوق=mkt, عملات=len(coins), مطارق=found, أراقب=' '.join(watching))
                 # 2) كل 10 ثوانٍ: السكنر يفحص الكسر، والبوت يقرر الدخول ويدير المخاطرة
+                # يفحص كل العملات المراقبة أولاً، ثم يدخل في الأقوى بينها إن كسرت أكثر من واحدة
+                checks = []
                 for s, w in list(watching.items()):
+                    checks.append((s, w, check_entry(ex, s, w)))
+                ready = [c for c in checks if c[2]['action'] == 'enter']
+                ready.sort(key=lambda c: (c[1]['m']['stars'], c[2].get('brk_vr', 0)), reverse=True)
+                for s, w, r in [c for c in checks if c[2]['action'] != 'enter'] + ready[:1]:
                     m = w['m']
-                    r = check_entry(ex, s, w)
                     now = r['price']
                     if r['action'] == 'drop':
                         del watching[s]
@@ -543,7 +550,7 @@ def run_signals():
                         watching.clear()
                         save()
                         tg.send(f"🟢 ادخل: {s}\n"
-                                f"المبلغ: {st['balance']:.2f}$\n"
+                                f"السعر: {fmt_p(now)}\n"
                                 f"🎯 الهدف: {fmt_p(tp)}\n"
                                 f"🛑 الوقف: {fmt_p(stop)}")
                         log(f"ادخل {s} | حجم الكسر ×{brk_vr:.1f} | بسعر {fmt_p(now)} | هدف {fmt_p(tp)} | وقف {fmt_p(stop)}")
@@ -574,7 +581,7 @@ def run_signals():
             n_all, w_all = st['trades'], st['wins']
             tg.send(rtl([
                 "💓 تقرير", LINE,
-                "💰 الرصيد: " + N("%.2f$" % st['balance']),
+                "💰 الأداء الكلي: " + N("%+.2f%%" % perf()),
                 f"🌍 مزاج السوق: {mkt_hb}",
                 f"📊 أرباح اليوم: {N(f'{day_pct():+.2f}%')}",
                 f"🔍 آخر فحص: {N(last_scan[:-4] + '-USDT' if last_scan else '—')}", LINE,
